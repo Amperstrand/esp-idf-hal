@@ -19,6 +19,9 @@ rust-version = "1.82"
 harness = false
 
 [features]
+# Amperstrand patch: opt-in legacy I2C driver (ccid-firmware-rs issues
+# #63/#80 — the PN7160 ACK-window work needs the pre-new-driver path).
+legacy-i2c = []
 default = ["std", "binstart"]
 std = ["alloc", "esp-idf-sys/std"]
 alloc = []
