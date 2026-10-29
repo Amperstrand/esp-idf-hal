@@ -133,12 +133,17 @@ jobs:
       - name: Setup | Rust
         if: matrix.target == 'riscv32imc-esp-espidf'
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
           .github/retry.sh rustup toolchain install ${{ env.rust_toolchain }} --profile minimal --component rustfmt,clippy,rust-src
           rustup default ${{ env.rust_toolchain }}
 
       - name: Setup | Rust for Xtensa
         if: matrix.target != 'riscv32imc-esp-espidf'
         run: |
+          # rustup lives in ~/.cargo/bin; job shells are non-login, so PATH
+          # must be exported explicitly (ubuntu-latest preinstalls it
+          # system-wide — other runners do not)
+          export PATH="$HOME/.cargo/bin:$PATH"
           # rustc -vV is version-stable; `rustup show` dropped "Default host"
           # from its non-verbose output in 1.29 (broke this on runners
           # with fresh rustups — the fleet hit it 2026-10-29)
