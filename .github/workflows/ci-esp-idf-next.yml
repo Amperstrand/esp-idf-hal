@@ -1,3 +1,10 @@
+# RUNNER POLICY (2026-10-29, Amperstrand/ops#43): prefer the org's
+# self-hosted fleet, hosted as fallback. This workflow gates push(master)
+# as well as the nightly, so its legs must never SKIP: pick-runner (a
+# secret-free executed-jobs probe — the runners API is admin-only to job
+# tokens) routes dynamically — fleet heartbeat within 24h =>
+# [self-hosted, legion-vm] (warm espup toolchains + target dirs via
+# clean:false are most of the win), otherwise ubuntu-latest unchanged.
 name: CIEspIdfNext
 
 on:
@@ -26,9 +33,68 @@ env:
   GATEWAY_NETMASK: "24"
 
 jobs:
+  pick-runner:
+    name: pick runner (prefer self-hosted)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - name: Probe fleet availability (secret-free)
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # Availability = a job executed on a legion/ai-legion runner within
+          # 24h (machine-class heartbeat; the runners API is admin-only to
+          # job tokens). Own repo first; the kali-live-headless CI lane
+          # bootstraps the signal for first-time repos.
+          cutoff=$(date -u -d '24 hours ago' +%s)
+          case "$cutoff" in ''|*[!0-9]*) echo "::error::bad cutoff"; exit 1 ;; esac
+          saw_fleet() {
+            local repo=$1 pages=$2 runs run verdict
+            runs=$(gh api "repos/$repo/actions/runs?per_page=$pages" \
+              --jq ".workflow_runs[]
+                    | select(.status == \"completed\")
+                    | select((.updated_at | fromdateiso8601) > $cutoff)
+                    | .id" 2>&1) || {
+              echo "::notice::probe $repo listing failed: $(printf '%s' "$runs" | tail -1)"
+              return 1
+            }
+            for run in $runs; do
+              verdict=$(gh api "repos/$repo/actions/runs/$run/jobs" \
+                --jq 'any(.jobs[]; ((.runner_name // "") | (startswith("legion-") or startswith("ai-legion"))))' 2>/dev/null || true)
+              if [ "$verdict" = true ]; then
+                echo "::notice::probe $repo: run $run executed on a fleet runner"
+                return 0
+              fi
+            done
+            echo "::notice::probe $repo: no fleet runner within 24h"
+            return 1
+          }
+          if saw_fleet "${{ github.repository }}" 15 \
+             || saw_fleet Amperstrand/kali-live-headless 5; then
+            echo 'runner=["self-hosted","legion-vm"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Lane summary
+        run: |
+          {
+            echo "## Runner lane"
+            echo '```'
+            echo "runner: ${{ steps.pick.outputs.runner }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   compile:
     name: "${{ matrix.target }} / ${{ matrix.idf-version }}"
-    runs-on: ubuntu-latest
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    # esp-idf builds are chunky; bound the leg and the queue race
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +114,10 @@ jobs:
     steps:
       - name: Setup | Checkout
         uses: actions/checkout@v3
+        with:
+          # persistent runners keep target/ + examples' build dirs warm;
+          # hosted legs are fresh VMs either way
+          clean: false
 
       # A CI cell builds ESP-IDF twice (the std and no_std variants of esp-idf-sys differ in
       # features, hence in build-script output directory) and links all examples, which
@@ -63,13 +133,21 @@ jobs:
       - name: Setup | Rust
         if: matrix.target == 'riscv32imc-esp-espidf'
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
           .github/retry.sh rustup toolchain install ${{ env.rust_toolchain }} --profile minimal --component rustfmt,clippy,rust-src
           rustup default ${{ env.rust_toolchain }}
 
       - name: Setup | Rust for Xtensa
         if: matrix.target != 'riscv32imc-esp-espidf'
         run: |
-          host=$(rustup show | grep "Default host" | sed -e 's/.* //')
+          # rustup lives in ~/.cargo/bin; job shells are non-login, so PATH
+          # must be exported explicitly (ubuntu-latest preinstalls it
+          # system-wide — other runners do not)
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # rustc -vV is version-stable; `rustup show` dropped "Default host"
+          # from its non-verbose output in 1.29 (broke this on runners
+          # with fresh rustups — the fleet hit it 2026-10-29)
+          host=$(rustc -vV | sed -n 's/^host: //p')
           .github/retry.sh curl -sSfL https://github.com/esp-rs/espup/releases/latest/download/espup-$host -o "$HOME/.cargo/bin/espup"
           chmod +x "$HOME/.cargo/bin/espup"
           # A failed install must not leave a partial toolchain behind for the next attempt to skip
