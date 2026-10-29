@@ -171,7 +171,9 @@ jobs:
       - name: Setup | ldproxy
         run: |
           .github/retry.sh curl -sSfL https://github.com/esp-rs/embuild/releases/latest/download/ldproxy-x86_64-unknown-linux-gnu.zip -o $HOME/.cargo/bin/ldproxy.zip
-          unzip "$HOME/.cargo/bin/ldproxy.zip" -d "$HOME/.cargo/bin/"
+          # -o: persistent runners keep the previous run's binary; without it
+          # unzip asks "replace?" interactively and dies on EOF (2026-10-29)
+          unzip -o "$HOME/.cargo/bin/ldproxy.zip" -d "$HOME/.cargo/bin/"
           chmod a+x $HOME/.cargo/bin/ldproxy
 
       - name: Build | Fmt Check
