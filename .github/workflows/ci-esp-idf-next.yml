@@ -14,6 +14,13 @@ on:
   schedule:
     - cron: "50 5 * * *"
   workflow_dispatch:
+    inputs:
+      force_lane:
+        description: "auto | selfhosted | hosted — override the probe (human re-arm)"
+        required: false
+        default: auto
+        type: choice
+        options: [auto, selfhosted, hosted]
 
 # A new run for the same branch or PR cancels the one still in progress
 concurrency:
@@ -114,6 +121,16 @@ jobs:
             echo "::notice::probe $repo: no fleet runner within 24h"
             return 1
           }
+          case "${{ inputs.force_lane || 'auto' }}" in
+            selfhosted)
+              echo '::notice::force_lane=selfhosted — human re-arm, probe bypassed'
+              echo 'runner=["self-hosted","legion-vm"]' >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            hosted)
+              echo '::notice::force_lane=hosted — human override, probe bypassed'
+              echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
           if saw_fleet "${{ github.repository }}" 15 && fleet_canary_alive; then
             echo 'runner=["self-hosted","legion-vm"]' >> "$GITHUB_OUTPUT"
           elif ! fleet_canary_alive; then
