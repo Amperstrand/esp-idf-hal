@@ -6,7 +6,7 @@ on:
       - master
   pull_request:
   schedule:
-    - cron: "50 4 * * *"
+    - cron: '9 7 * * *'
   workflow_dispatch:
 
 # A new run for the same branch or PR cancels the one still in progress
